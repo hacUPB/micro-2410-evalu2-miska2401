@@ -803,3 +803,297 @@ SysTick_Handler:                // Inicio del manejador de la interrupción SysT
 .equ AMARILLO, 3                     // Estado AMARILLO: Código de estado para el semáforo en AMARILLO.
 
 ```
+
+# Rutina Anti-rebote
+![alt text](image.png)
+**Figura 3:** Máquina de Estados tipo Moore
+
+Archivo start.s
+``` Assembly
+        #include "definitions.h"
+        
+        .syntax unified
+        .global _start
+        .text
+
+        .thumb_func
+        _start:
+            bl init_clock
+            bl init_port
+            bl init_GPIO
+            bl init_systick
+
+            // Inicialización de la máquina de estados
+            ldr r0, =Base_maquina_0
+            ldr r1, =estado_inicial
+            str r1, [r0, #var_estado_M0]
+            mov r1, #0
+            str r1, [r0, #entrada_tiempo_M0]
+
+        loop:
+            bl estado 
+            b loop
+// -------------------------------------------------        
+    .thumb_func 
+        init_port: // Initializes port
+            ldr r0, =PORTD
+            mov r2, #1
+            lsl r2, #MUX_OFFSET
+            orr r2, #3 // Pull-up resistors
+            str r2, [r0]
+
+            ldr r0, =PORTB
+            mov r2, #1
+            lsl r2, #MUX_OFFSET
+            str r2, [r0]
+
+            bx lr
+// -------------------------------------------------
+    .thumb_func
+    init_GPIO: // Initializes GPIO
+        ldr r0, =GPIOD
+        ldr r2, =GPIO_PDDR_OFFSET
+        mov r1, #0
+        str r1, [r0, r2]
+
+        ldr r0, =GPIOB
+        ldr r2, =GPIO_PDDR_OFFSET
+        mov r1, #1
+        str r1, [r0, r2]
+
+        bx lr
+// -------------------------------------------------
+    .thumb_func
+    init_clock: // Initializes clock
+        ldr r0, =PCC_PORTD
+        mov r1, #1
+        lsl r1, #PCC_CGC_OFFSET
+        str r1, [r0]
+
+        ldr r0, =PCC_PORTB
+        mov r1, #1
+        lsl r1, #PCC_CGC_OFFSET
+        str r1, [r0]
+
+        bx lr
+// -------------------------------------------------
+    .thumb_func
+    init_systick:
+        // Configurar SysTick 
+        ldr r0, =SYST_RVR
+        ldr r1, =SYSTICK_RELOAD_1MS 
+        str r1, [r0]                      
+
+        ldr r0, =SYST_CVR
+        mov r1, #0
+        str r1, [r0]                      
+
+        ldr r0, =SYST_CSR
+        mov r1, #7
+        str r1, [r0]                      
+        bx  lr
+```
+
+Archivo estado.s
+``` Assembly
+     #include "definitions.h"
+
+    .syntax unified
+    .global estado
+    .text
+
+    .align 2
+    dir_tabla_estados:
+    .long Estado_Inicial // 0
+    .long Estado_Alto // 1
+    .long Estado_Bajo // 2         
+    .long Estado_Intermedio // 3
+    
+    .thumb_func
+    estado:
+        push {lr}
+        ldr r4, =Base_maquina_0
+        ldr r0, [r4, #var_estado_M0]   
+        lsl r0, #2                     
+        ldr r4, =dir_tabla_estados     
+        ldr r1, [r4, r0]               
+        bx r1            
+    
+    .thumb_func
+    Estado_Inicial:
+        ldr r0, =GPIOD
+        ldr r1, [r0, #GPIO_PDIR_OFFSET] // Entrada del Switch
+        and r1, #1
+
+        cmp r1, #1
+        it eq
+        moveq r2, #estado_alto // La entrada está en 1
+        it ne
+        movne r2, #estado_bajo // La entrada está en 0
+
+        ldr r0, =Base_maquina_0
+        str r2, [r0, #var_estado_M0] // Determina el siguiente estado de acuerdo con la entrada
+        str r2, [r0, #var_estado_anterior] // Guarda el valor del estado anterior, que corresponde al estado inicial
+
+        pop {lr}
+        bx lr
+
+    .thumb_func
+    Estado_Alto:
+        ldr r0, =GPIOD
+        ldr r1, [r0, #GPIO_PDIR_OFFSET] // Entrada del Switch
+        and r1, #1
+
+        cmp r1, #1
+        it eq
+        moveq r2, #estado_alto // La entrada está en 1
+        itt ne
+        movne r2, #estado_intermedio // La entrada está en 0
+        blne reset_timer
+        
+        ldr r0, =Base_maquina_0
+        str r2, [r0, #var_estado_M0]   
+        
+        ldr r0, =GPIOB
+        mov r1, #0
+        str r1, [r0, #GPIO_PDOR_OFFSET]    
+
+        pop {lr}
+        bx lr
+
+    .thumb_func
+    Estado_Bajo:
+        ldr r0, =GPIOD
+        ldr r1, [r0, #GPIO_PDIR_OFFSET] // Entrada del Switch
+        and r1, #1
+
+        cmp r1, #1
+        itt eq
+        moveq r2, #estado_intermedio // La entrada está en 1
+        bleq reset_timer
+        it ne
+        movne r2, #estado_bajo // La entrada está en 0
+        
+        ldr r0, =Base_maquina_0
+        str r2, [r0, #var_estado_M0]       
+        
+        ldr r0, =GPIOB
+        mov r1, #1
+        str r1, [r0, #GPIO_PDOR_OFFSET]   
+
+        pop {lr}
+        bx lr
+    
+    .thumb_func
+    Estado_Intermedio:
+        ldr r0, =GPIOD
+        ldr r1, [r0, #GPIO_PDIR_OFFSET] // Entrada del Switch
+        and r1, #1
+        
+        ldr r0, =Base_maquina_0
+        ldr r1, [r0, #entrada_tiempo_M0] // Tiempo Transcurrido
+        
+        ldr r0, =tiempo_estado_intermedio
+        cmp r1, r0 // Verifica tiempo del estado intermedio
+        blt SKIP
+        
+        ldr r0, =GPIOD
+        ldr r1, [r0, #GPIO_PDIR_OFFSET] // Entrada del Switch (r1)
+        and r1, #1      
+        
+        ldr r0, =Base_maquina_0
+        ldr r2, [r0, #var_estado_anterior] // Estado anterior (r2)
+
+        mvn r3, r2 // Negación del Estado anterior (r3)
+        and r3, #1
+        cmp r1, r3 // Si la transición es efectiva, debe leerse el estado complementario
+        it eq
+        moveq r2, r1 // Se realizará transición al estado complementario
+        // En caso de no haber transición efectiva, se permanecerá en el estado anterior
+
+        ldr r0, =Base_maquina_0
+        str r2, [r0, #var_estado_M0]
+        str r2, [r0, #var_estado_anterior]
+
+        SKIP:
+        pop {lr}
+        bx lr
+
+        .thumb_func
+        reset_timer:
+        ldr r0, =Base_maquina_0
+        mov r1, #0
+        str r1, [r0, #entrada_tiempo_M0]
+
+        bx lr
+```
+
+Archivo systick_handler.s
+``` Assembly
+  .syntax unified
+  .global SysTick_Handler
+  .text
+
+  .equ Base_maquina_0, 0x20001000      // Dirección base compartida
+  .equ entrada_tiempo_M0, 8            // Offset para la entrada de tiempo transcurrido
+
+  .thumb_func
+
+SysTick_Handler:
+    push {r0, r4}
+    ldr r4, =Base_maquina_0
+    ldr r0, [r4, #entrada_tiempo_M0]  // Leer la variable de tiempo transcurrido
+    add r0, r0, #1                    // Incrementar en 1 (1 ms ha transcurrido)
+    str r0, [r4, #entrada_tiempo_M0]  // Guardar el valor actualizado
+    pop {r0, r4}
+    bx lr                             // Retornar de la interrupción
+```
+
+Archivo definitions.h
+``` Assembly
+        .text
+    
+        // Direcciones de los registros SysTick
+        .equ SYSTICK_BASE, 0xE000E010        // Base del SysTick
+        .equ SYST_CSR, (SYSTICK_BASE + 0x0)  // SysTick Control and Status Register
+        .equ SYST_RVR, (SYSTICK_BASE + 0x4)  // SysTick Reload Value Register
+        .equ SYST_CVR, (SYSTICK_BASE + 0x8)  // SysTick Current Value Register
+
+        .equ SYSTICK_ENABLE, 0x1             // Bit para habilitar el SysTick
+        .equ SYSTICK_TICKINT, 0x2            // Bit para habilitar la interrupción del SysTick
+        .equ SYSTICK_CLKSOURCE, 0x4          // Bit para seleccionar el reloj del procesador
+
+        .equ SYSTICK_RELOAD_1MS, 48000 - 1    // Valor para recargar el SysTick cada 1 ms (suponiendo un reloj de 48 MHz)
+
+        // Clock-related constants
+        .equ PCC_PORTD, 0x40065130
+        .equ PCC_PORTB, 0x40065128
+        .equ PCC_PORTC, 0x4006512C
+        .equ PCC_CGC_OFFSET, 30 
+        
+        // Port-related constants
+        .equ PORTD, 0x4004C000
+        .equ PORTB, 0x4004A000
+        .equ PORTC, 0x4004B000
+        .equ MUX_OFFSET, 8
+
+        // GPIO-related constants
+        .equ GPIOD, 0x400FF0C0
+        .equ GPIOB, 0x400FF040
+        .equ GPIOC, 0x400FF080
+        .equ GPIO_PDDR_OFFSET, 0x14
+        .equ GPIO_PDOR_OFFSET, 0x00
+        .equ GPIO_PDIR_OFFSET, 0x10
+        .equ GPIO_PTOR_OFFSET, 0x0C
+        
+        // Constantes relacionadas a la máquina de estados
+        .equ Base_maquina_0, 0x20001000      // Dirección base compartida
+        .equ var_estado_M0, 0                // Offset para la variable de estado
+        .equ var_estado_anterior, 4          // Offset para la varaible de estado anterior
+        .equ entrada_tiempo_M0, 8            // Offset para la entrada de tiempo transcurrido
+        .equ estado_inicial, 0
+        .equ estado_alto, 1
+        .equ estado_bajo, 2
+        .equ estado_intermedio, 3
+        .equ tiempo_estado_intermedio, 50 // 50 ms
+```
