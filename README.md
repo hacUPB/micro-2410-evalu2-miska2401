@@ -1097,3 +1097,597 @@ Archivo definitions.h
         .equ estado_intermedio, 3
         .equ tiempo_estado_intermedio, 50 // 50 ms
 ```
+A continuación se agrega la documentación correspondiente al proyecto de la matriz de LEDs con la conmutación de imágenese por medio de pulsadores.
+![alt text](image-1.png)
+![alt text](image-2.png)
+![alt text](image-3.png)
+![alt text](image-4.png)
+![alt text](image-5.png)
+![alt text](image-6.png)
+![alt text](image-7.png)
+El código correspondiente se adjunta a continuación:
+``` Assembly
+        #include "definitions.h"
+        
+        .syntax unified
+        .global _start
+        .text
+        cpsie i   // Enable interrupts globally
+
+        .thumb_func
+        _start:
+            bl init_clock
+            bl init_port
+            bl init_GPIO
+            bl init_systick
+            bl init_LED_matrix
+
+            // Inicialización de la máquina de estados
+            ldr r0, =Base_maquina_0
+            ldr r1, =estado_1
+            str r1, [r0, #var_estado_M0]
+            mov r1, #0
+            str r1, [r0, #entrada_tiempo_M0]
+            str r1, [r0, #entrada_num_imagen_M0] // Se comienza con la imagen 0
+
+            ldr r0, =#0xe000e104    // Cargar dirección de NVIC_ISER1
+            ldr r1, =(1 << 30)  // Establecer bit correspondiente al número de interrupción de PORTD
+            str r1, [r0]
+
+            cpsie i
+
+        loop:
+            bl estado
+            b loop
+// -------------------------------------------------        
+        .thumb_func 
+        init_port: // Initializes port
+            ldr r0, =PORTC
+            ldr r1, =PORTB
+            mov r2, #1
+            lsl r2, #MUX_OFFSET
+
+            mov r3, #0x3C
+            mov r4, #0x20
+            init_port_C:              
+                    str r2, [r0, r3]
+                    add r3, #-4
+                    cmp r3, r4
+                    bge init_port_C
+
+            mov r3, #0x44
+            mov r4, #0x28
+            init_port_B:
+                    str r2, [r1, r3]
+                    add r3, #-4
+                    cmp r3, r4
+                    bge init_port_B
+
+            ldr r0, =PORTD
+            mov r1, #1
+            lsl r1, #MUX_OFFSET
+            orr r1, #3 // Pull-up resistors
+            mov r2, #10
+            lsl r2, #16
+            orr r1, r2 // Interruption on falling edge
+            mov r3, #0x34
+            mov r4, #0x28
+            init_port_D:
+                    str r1, [r0, r3]
+                    add r3, #-4
+                    cmp r3, r4
+                    bge init_port_D
+
+            bx lr
+// -------------------------------------------------
+    .thumb_func
+    init_GPIO: // Initializes GPIO
+        ldr r0, =GPIOC
+        ldr r2, =GPIO_PDDR_OFFSET
+        mov r1, #0xFF
+        lsl r1, #8
+        str r1, [r0, r2]
+
+        ldr r0, =GPIOB
+        mov r1, #0xFF
+        lsl r1, #10
+        str r1, [r0, r2]
+        
+        ldr r0, =GPIOD
+        mov r1, #0
+        str r1, [r0, r2]
+
+        bx lr
+// -------------------------------------------------
+    .thumb_func
+    init_clock: // Initializes clock
+        ldr r0, =PCC_PORTB
+        mov r1, #1
+        lsl r1, #PCC_CGC_OFFSET
+        str r1, [r0]
+
+        ldr r0, =PCC_PORTC
+        str r1, [r0]
+
+        ldr r0, =PCC_PORTD
+        str r1, [r0]
+        
+        bx lr
+// -------------------------------------------------
+    .thumb_func
+    init_systick:
+        // Configurar SysTick 
+        ldr r0, =SYST_RVR
+        ldr r1, =SYSTICK_RELOAD_1MS
+        str r1, [r0]                      
+
+        ldr r0, =SYST_CVR
+        mov r1, #0
+        str r1, [r0]                      
+
+        ldr r0, =SYST_CSR
+        mov r1, #7
+        str r1, [r0]                      
+        bx  lr
+// -------------------------------------------------
+    .thumb_func
+    init_LED_matrix: // Initializes LED matrix by turning it off
+        ldr r0, =GPIOC
+        ldr r1, =GPIOB
+        ldr r2, =GPIO_PDOR_OFFSET
+
+        mov r3, #0xFF
+        lsl r3, #8
+        str r3, [r0, r2]
+
+        mov r3, #0x00
+        lsl r3, #10
+        str r3, [r1, r2]
+
+        bx lr
+```
+``` Assembly
+   #include "definitions.h"
+
+  .syntax unified
+  .global estado
+  .text
+
+  .align 2
+dir_tabla_estados:
+  .long Estado_1          
+  .long Estado_2 
+  .long Estado_3       
+  .long Estado_4
+  .long Estado_5
+  .long Estado_6
+  .long Estado_7
+  .long Estado_8     
+
+  .thumb_func
+
+estado:
+    push {lr}
+    ldr r4, =Base_maquina_0
+    ldr r0, [r4, #var_estado_M0]   
+    lsl r0, #2                     
+    ldr r4, =dir_tabla_estados     
+    ldr r1, [r4, r0]               
+    bx r1                          
+
+    .thumb_func
+Estado_1:        
+    ldr r0, =leds
+    ldr r1, =Base_maquina_0
+    ldr r2, [r1, #entrada_num_imagen_M0]
+    lsl r2, #3
+    add r2, #0
+    ldrb r6, [r0, r2] // r3 contains LEDS row 1 bits
+    
+    bl turn_on_row
+    bl turn_off_row
+    
+    ldr r0, =Base_maquina_0
+    ldr r1, [r0, #entrada_tiempo_M0]
+    cmp r1, #2
+    beq CAMBIA_ESTADO1
+    pop {lr}
+    bx lr
+
+    CAMBIA_ESTADO1:
+    // Cambiar al siguiente estado 
+    ldr r4, =Base_maquina_0 
+    mov r1, #estado_2
+    str r1, [r4, #var_estado_M0]
+    mov r2, #0
+    str r2, [r4, #entrada_tiempo_M0]
+    pop {lr}
+    bx lr
+
+    .thumb_func
+Estado_2:      
+    ldr r0, =leds
+    ldr r1, =Base_maquina_0
+    ldr r2, [r1, #entrada_num_imagen_M0]
+    lsl r2, #3
+    add r2, #1
+    ldrb r6, [r0, r2] // r6 contains LEDS row 2 bits
+    
+    bl turn_on_row
+    bl turn_off_row
+    
+    ldr r0, =Base_maquina_0
+    ldr r1, [r0, #entrada_tiempo_M0]
+    cmp r1, #2
+    beq CAMBIA_ESTADO2
+    pop {lr}
+    bx lr
+
+    CAMBIA_ESTADO2:
+    // Cambiar al siguiente estado
+    ldr r4, =Base_maquina_0 
+    mov r1, #estado_3
+    str r1, [r4, #var_estado_M0]
+    mov r2, #0
+    str r2, [r4, #entrada_tiempo_M0]
+    pop {lr}
+    bx lr
+
+    .thumb_func
+Estado_3:       
+    ldr r0, =leds
+    ldr r1, =Base_maquina_0
+    ldrb r2, [r1, #entrada_num_imagen_M0]
+    lsl r2, #3
+    add r2, #2
+    ldrb r6, [r0, r2] // r6 contains LEDS row 3 bits
+    
+    bl turn_on_row
+    bl turn_off_row
+
+    ldr r0, =Base_maquina_0
+    ldr r1, [r0, #entrada_tiempo_M0]
+    cmp r1, #2
+    beq CAMBIA_ESTADO3
+    pop {lr}
+    bx lr
+
+    CAMBIA_ESTADO3:
+    // Cambiar al siguiente estado 
+    ldr r4, =Base_maquina_0 
+    mov r1, #estado_4
+    str r1, [r4, #var_estado_M0]
+    mov r2, #0
+    str r2, [r4, #entrada_tiempo_M0]
+    pop {lr}
+    bx lr
+
+    .thumb_func
+Estado_4:        
+    ldr r0, =leds
+    ldr r1, =Base_maquina_0
+    ldr r2, [r1, #entrada_num_imagen_M0]
+    lsl r2, #3
+    add r2, #3
+    ldrb r6, [r0, r2] // r6 contains LEDS row 4 bits
+    
+    bl turn_on_row
+    bl turn_off_row
+
+    ldr r0, =Base_maquina_0
+    ldr r1, [r0, #entrada_tiempo_M0]
+    cmp r1, #2
+    beq CAMBIA_ESTADO4
+    pop {lr}
+    bx lr
+
+    CAMBIA_ESTADO4:
+    // Cambiar al siguiente estado 
+    ldr r4, =Base_maquina_0 
+    mov r1, #estado_5
+    str r1, [r4, #var_estado_M0]
+    mov r2, #0
+    str r2, [r4, #entrada_tiempo_M0]
+    pop {lr}
+    bx lr
+
+    .thumb_func
+Estado_5:       
+    ldr r0, =leds
+    ldr r1, =Base_maquina_0
+    ldr r2, [r1, #entrada_num_imagen_M0]
+    lsl r2, #3
+    add r2, #4
+    ldrb r6, [r0, r2] // r6 contains LEDS row 5 bits
+    
+    bl turn_on_row
+    bl turn_off_row
+
+    ldr r0, =Base_maquina_0
+    ldr r1, [r0, #entrada_tiempo_M0]
+    cmp r1, #2
+    beq CAMBIA_ESTADO5
+    pop {lr}
+    bx lr
+
+    CAMBIA_ESTADO5:
+    // Cambiar al siguiente estado 
+    ldr r4, =Base_maquina_0 
+    mov r1, #estado_6
+    str r1, [r4, #var_estado_M0]
+    mov r2, #0
+    str r2, [r4, #entrada_tiempo_M0]
+    pop {lr}
+    bx lr
+
+    .thumb_func
+Estado_6:       
+    ldr r0, =leds
+    ldr r1, =Base_maquina_0
+    ldr r2, [r1, #entrada_num_imagen_M0]
+    lsl r2, #3
+    add r2, #5
+    ldrb r6, [r0, r2] // r6 contains LEDS row 6 bits
+    
+    bl turn_on_row
+    bl turn_off_row
+
+    ldr r0, =Base_maquina_0
+    ldr r1, [r0, #entrada_tiempo_M0]
+    cmp r1, #2
+    beq CAMBIA_ESTADO6
+    pop {lr}
+    bx lr
+
+    CAMBIA_ESTADO6:
+    // Cambiar al siguiente estado 
+    ldr r4, =Base_maquina_0 
+    mov r1, #estado_7
+    str r1, [r4, #var_estado_M0]
+    mov r2, #0
+    str r2, [r4, #entrada_tiempo_M0]
+    pop {lr}
+    bx lr
+
+    .thumb_func
+Estado_7:        
+    ldr r0, =leds
+    ldr r1, =Base_maquina_0
+    ldr r2, [r1, #entrada_num_imagen_M0]
+    lsl r2, #3
+    add r2, #6
+    ldrb r6, [r0, r2] // r6 contains LEDS row 7 bits
+    
+    bl turn_on_row
+    bl turn_off_row
+
+    ldr r0, =Base_maquina_0
+    ldr r1, [r0, #entrada_tiempo_M0]
+    cmp r1, #2
+    beq CAMBIA_ESTADO7
+    pop {lr}
+    bx lr
+
+    CAMBIA_ESTADO7:
+    // Cambiar al siguiente estado 
+    ldr r4, =Base_maquina_0 
+    mov r1, #estado_8
+    str r1, [r4, #var_estado_M0]
+    mov r2, #0
+    str r2, [r4, #entrada_tiempo_M0]
+    pop {lr}
+    bx lr
+
+    .thumb_func
+Estado_8:       
+    ldr r0, =leds
+    ldr r1, =Base_maquina_0
+    ldr r2, [r1, #entrada_num_imagen_M0]
+    lsl r2, #3
+    add r2, #7
+    ldrb r6, [r0, r2] // r6 contains LEDS row 8 bits
+    
+    bl turn_on_row
+    bl turn_off_row
+
+    ldr r0, =Base_maquina_0
+    ldr r1, [r0, #entrada_tiempo_M0]
+    cmp r1, #2
+    beq CAMBIA_ESTADO8
+    pop {lr}
+    bx lr
+
+    CAMBIA_ESTADO8:
+    // Cambiar al siguiente estado 
+    ldr r4, =Base_maquina_0 
+    mov r1, #estado_1
+    str r1, [r4, #var_estado_M0]
+    mov r2, #0
+    str r2, [r4, #entrada_tiempo_M0]
+    pop {lr}
+    bx lr
+
+turn_on_row:
+        ldr r2, =GPIOC
+        ldr r3, =GPIOB
+        ldr r4, =GPIO_PDOR_OFFSET
+        
+        ldr r1, =Base_maquina_0
+        ldr r0, [r1, #var_estado_M0]
+
+        mov r5, #1 // Row 
+        lsl r5, #8 // Pins offset
+        lsl r5, r0 // Row offset
+
+        // Sets Row Active
+        ldr r7, [r2, r4]
+        mvn r5, r5
+        and r7, r5
+        str r7, [r2, r4]
+
+        // Sets Column bits
+        lsl r6, #10
+        str r6, [r3, r4]
+        
+        bx lr
+
+turn_off_row:     
+        ldr r2, =GPIOC
+        ldr r3, =GPIOB
+        ldr r4, =GPIO_PDOR_OFFSET
+
+        mov r5, #1 // Row 
+        lsl r5, #8 // Pins offset
+        lsl r5, r0 // Row offset
+
+        // Sets Row Inactive
+        ldr r7, [r2, r4]
+        orr r7, r5
+        str r7, [r2, r4]
+
+        // Clear Column Bits
+        mov r8, #0x00
+        lsl r8, #10
+        str r8, [r3, r4]
+        
+        bx lr
+```
+``` Assembly
+        .text
+    
+        // Direcciones de los registros SysTick
+        .equ SYSTICK_BASE, 0xE000E010        // Base del SysTick
+        .equ SYST_CSR, (SYSTICK_BASE + 0x0)  // SysTick Control and Status Register
+        .equ SYST_RVR, (SYSTICK_BASE + 0x4)  // SysTick Reload Value Register
+        .equ SYST_CVR, (SYSTICK_BASE + 0x8)  // SysTick Current Value Register
+
+        .equ SYSTICK_ENABLE, 0x1             // Bit para habilitar el SysTick
+        .equ SYSTICK_TICKINT, 0x2            // Bit para habilitar la interrupción del SysTick
+        .equ SYSTICK_CLKSOURCE, 0x4          // Bit para seleccionar el reloj del procesador
+
+        .equ SYSTICK_RELOAD_1MS, 48000 - 1    // Valor para recargar el SysTick cada 1 ms (suponiendo un reloj de 48 MHz)
+
+        // Clock-related constants
+        .equ PCC_PORTD, 0x40065130
+        .equ PCC_PORTB, 0x40065128
+        .equ PCC_PORTC, 0x4006512C
+        .equ PCC_CGC_OFFSET, 30 
+        
+        // Port-related constants
+        .equ PORTD, 0x4004C000
+        .equ PORTB, 0x4004A000
+        .equ PORTC, 0x4004B000
+        .equ MUX_OFFSET, 8
+
+        // GPIO-related constants
+        .equ GPIOD, 0x400FF0C0
+        .equ GPIOB, 0x400FF040
+        .equ GPIOC, 0x400FF080
+        .equ GPIO_PDDR_OFFSET, 0x14
+        .equ GPIO_PDOR_OFFSET, 0x00
+        .equ GPIO_PDIR_OFFSET, 0x0A
+        .equ GPIO_PTOR_OFFSET, 0x0C
+        
+        // Constantes relacionadas a la máquina de estados
+        .equ Base_maquina_0, 0x20001000      // Dirección base compartida
+        .equ var_estado_M0, 0                // Offset para la variable de estado
+        .equ entrada_tiempo_M0, 4            // Offset para la entrada de tiempo transcurrido
+        .equ entrada_num_imagen_M0, 8        
+        .equ estado_1, 0
+        .equ estado_2, 1
+        .equ estado_3, 2
+        .equ estado_4, 3
+        .equ estado_5, 4
+        .equ estado_6, 5
+        .equ estado_7, 6
+        .equ estado_8, 7
+    
+leds:
+            .byte 0b00111100 // Representación de la primera fila de LEDs (primer bloque)
+            .byte 0b00100100 // Representación de la segunda fila de LEDs (primer bloque)
+            .byte 0b00100100 // Representación de la tercera fila de LEDs (primer bloque)
+            .byte 0b00111100 // Representación de la cuarta fila de LEDs (primer bloque)
+            .byte 0b00100100 // Representación de la quinta fila de LEDs (primer bloque)
+            .byte 0b00100100 // Representación de la sexta fila de LEDs (primer bloque)
+            .byte 0b00111100 // Representación de la séptima fila de LEDs (primer bloque)
+            .byte 0b00100100 // Representación de la octava fila de LEDs (primer bloque)
+
+            .byte 0b00011110 // Representación de la primera fila de LEDs (segundo bloque)
+            .byte 0b00010010 // Representación de la segunda fila de LEDs (segundo bloque)
+            .byte 0b00010010 // Representación de la tercera fila de LEDs (segundo bloque)
+            .byte 0b00011110 // Representación de la cuarta fila de LEDs (segundo bloque)
+            .byte 0b00010010 // Representación de la quinta fila de LEDs (segundo bloque)
+            .byte 0b00010010 // Representación de la sexta fila de LEDs (segundo bloque)
+            .byte 0b00011110 // Representación de la séptima fila de LEDs (segundo bloque)
+            .byte 0b00010010 // Representación de la octava fila de LEDs (segundo bloque)
+
+            .byte 0b00001111 // Representación de la primera fila de LEDs (tercer bloque)
+            .byte 0b00001001 // Representación de la segunda fila de LEDs (tercer bloque)
+            .byte 0b00001001 // Representación de la tercera fila de LEDs (tercer bloque)
+            .byte 0b00001111 // Representación de la cuarta fila de LEDs (tercer bloque)
+            .byte 0b00001001 // Representación de la quinta fila de LEDs (tercer bloque)
+            .byte 0b00001001 // Representación de la sexta fila de LEDs (tercer bloque)
+            .byte 0b00001111 // Representación de la séptima fila de LEDs (tercer bloque)
+            .byte 0b00001001 // Representación de la octava fila de LEDs (tercer bloque)
+
+            .byte 0b10000111 // Representación de la primera fila de LEDs (cuarto bloque)
+            .byte 0b10000100 // Representación de la segunda fila de LEDs (cuarto bloque)
+            .byte 0b10000100 // Representación de la tercera fila de LEDs (cuarto bloque)
+            .byte 0b10000111 // Representación de la cuarta fila de LEDs (cuarto bloque)
+            .byte 0b10000100 // Representación de la quinta fila de LEDs (cuarto bloque)
+            .byte 0b10000100 // Representación de la sexta fila de LEDs (cuarto bloque)
+            .byte 0b10000111 // Representación de la séptima fila de LEDs (cuarto bloque)
+            .byte 0b10000100 // Representación de la octava fila de LEDs (cuarto bloque)
+```
+``` Assembly
+  #include "definitions.h"
+  
+  .syntax unified
+  .global PORTD_IRQHandler
+  .text
+
+  .thumb_func
+
+PORTD_IRQHandler:
+    push {r0, r1, r2, r3}
+    ldr r0, =PORTD
+    mov r1, #0x28                         // 10th pin offset          
+    mov r2, #0                            // r2 contiene el número de la imagen
+    LOOP:
+        cmp r1, #0x34
+        bgt END_LOOP
+        ldr r3, [r0, r1]
+        lsr r3, #24
+        ands r3, #1                       // La bandera de Interrupción está activa
+        bne END_LOOP 
+        add r1, #4
+        add r2, #1
+        b LOOP
+    END_LOOP:
+    ldr r0, =Base_maquina_0
+    str r2, [r0, #entrada_num_imagen_M0]
+    ldr r0, =PORTD
+    ldr r3, [r0, r1]
+    orr r3, #(1 << 24)
+    str r3, [r0, r1]
+    pop {r0, r1, r2, r3}
+    bx lr                                 // Retornar de la interrupción
+```
+``` Assembly
+  .syntax unified
+  .global SysTick_Handler
+  .text
+
+  .equ Base_maquina_0, 0x20001000      // Dirección base compartida
+  .equ entrada_tiempo_M0, 4            // Offset para la entrada de tiempo transcurrido
+  .thumb_func
+
+SysTick_Handler:
+    push {r0, r4}
+    ldr r4, =Base_maquina_0
+    ldr r0, [r4, #entrada_tiempo_M0]  // Leer la variable de tiempo transcurrido
+    add r0, r0, #1                    // Incrementar en 1 (1 ms ha transcurrido)
+    str r0, [r4, #entrada_tiempo_M0]  // Guardar el valor actualizado
+    pop {r0, r4}
+    bx lr                             // Retornar de la interrupción
+```
